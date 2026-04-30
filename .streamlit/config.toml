@@ -1,0 +1,12 @@
+﻿[theme]
+# 强制浅色主题
+base = "light"
+# Tailwind 经典蓝 (blue-500)
+primaryColor = "#3b82f6"
+# 全局大背景：极其干净的石板灰 (slate-50)
+backgroundColor = "#f8fafc"
+# 侧边栏/卡片背景：纯白
+secondaryBackgroundColor = "#ffffff"
+# 正文字体：深石板灰 (slate-900)
+textColor = "#0f172a"
+font = "sans serif"
