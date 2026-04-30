@@ -12,6 +12,7 @@ import model
 import Myloss
 import numpy as np
 from torchvision import transforms
+from training_logger import TrainingLogger
 
 
 def weights_init(m):
@@ -50,6 +51,9 @@ def train(config):
 
 	optimizer = torch.optim.Adam(DCE_net.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 	
+	# 初始化训练记录器
+	logger = TrainingLogger(save_dir=config.log_folder)
+
 	DCE_net.train()
 
 	for epoch in range(config.num_epochs):
@@ -78,11 +82,26 @@ def train(config):
 			torch.nn.utils.clip_grad_norm(DCE_net.parameters(),config.grad_clip_norm)
 			optimizer.step()
 
+			# 记录每个 iteration 的各项 loss
+			logger.log_iteration({
+				'L_spa':   loss_spa.item(),
+				'L_color': loss_col.item(),
+				'L_exp':   loss_exp.item(),
+				'L_TV':    Loss_TV.item(),
+				'total':   loss.item(),
+			})
+
 			if ((iteration+1) % config.display_iter) == 0:
 				print("Loss at iteration", iteration+1, ":", loss.item())
 			if ((iteration+1) % config.snapshot_iter) == 0:
 				
-				torch.save(DCE_net.state_dict(), config.snapshots_folder + "Epoch" + str(epoch) + '.pth') 		
+				torch.save(DCE_net.state_dict(), config.snapshots_folder + "Epoch" + str(epoch) + '.pth')
+
+		# epoch 结束，记录平均 loss 并持久化
+		logger.end_epoch(epoch)
+
+	# 训练结束，自动生成论文图表
+	logger.plot() 		
 
 
 
@@ -105,6 +124,7 @@ if __name__ == "__main__":
 	parser.add_argument('--snapshots_folder', type=str, default="snapshots/")
 	parser.add_argument('--load_pretrain', type=bool, default= False)
 	parser.add_argument('--pretrain_dir', type=str, default= "snapshots/Epoch99.pth")
+	parser.add_argument('--log_folder', type=str, default="logs/")
 
 	config = parser.parse_args()
 

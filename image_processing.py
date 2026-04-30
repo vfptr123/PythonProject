@@ -1,9 +1,8 @@
-"""
-图像处理算法调度中心 v3.0
+"""图像处理算法调度中心 v4.0
 ================================
 职责划分：
 1. 算法实现：HE/Retinex/Zero-DCE
-2. 指标计算：RMSE/PSNR/SSIM
+2. 指标计算：PSNR/SSIM/NIQE
 3. 性能监控：耗时/内存
 4. 算法调度：并行执行
 
@@ -16,8 +15,6 @@ import numpy as np
 import torch
 import time
 import psutil
-from PIL import Image
-import torchvision.transforms as transforms
 import streamlit as st  # 引入 streamlit 用于缓存装饰器
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from skimage.metrics import structural_similarity as ssim_metric
@@ -34,30 +31,24 @@ try:
 except ImportError as e:
     print(f"Warning: Zero-DCE modules not found: {e}")
 
-# 导入优化后的算法
-try:
-    import HE_optimized as HE
-    import Retinex_optimized as Retinex
-    print("使用优化版本的算法")
-except ImportError:
-    import HE
-    import Retinex
-    print("使用标准版本的算法")
+# 导入基础算法
+import HE
+import Retinex
 
 # ==========================================
-# 传统算法部分 (全部使用优化版本)
+# 传统算法部分（使用基础版本）
 # ==========================================
 
 def process_with_he(img_bgr):
-    """调用优化后的 HE (全局直方图均衡化) 算法"""
-    return HE.global_histogram_equalization_optimized(img_bgr)
+    """调用 HE (全局直方图均衡化) 算法"""
+    return HE.global_histogram_equalization(img_bgr)
 
 def process_with_retinex(img_bgr, sigma_list=None, G=5.0, b=25.0, 
                          alpha=125.0, beta=46.0, low_clip=0.01, high_clip=0.99):
-    """调用优化后的 Retinex (MSRCR) 算法"""
+    """调用 Retinex (MSRCR) 算法"""
     if sigma_list is None:
         sigma_list = [15, 80, 250]
-    return Retinex.MSRCR_optimized(
+    return Retinex.MSRCR(
         img_bgr, 
         sigma_list=sigma_list, 
         G=G, b=b, 
@@ -109,14 +100,8 @@ def process_with_zerodce(model, img_bgr):
     try:
         device = next(model.parameters()).device
         
-        # BGR -> RGB
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        
-        # 归一化到 [0, 1]
-        img_float = img_rgb.astype(np.float32) / 255.0
-        
-        # 转换为 Tensor [H, W, C] -> [C, H, W]
-        img_tensor = torch.from_numpy(img_float).permute(2, 0, 1).unsqueeze(0).to(device)
+        # 复用通用转换：BGR → RGB float32 Tensor [1, C, H, W]
+        img_tensor = bgr_to_tensor(img_bgr).to(device)
         
         # 推理
         with torch.no_grad():
@@ -138,27 +123,79 @@ def process_with_zerodce(model, img_bgr):
 
 
 # ==========================================
+# 通用图像转换工具
+# ==========================================
+
+def bgr_to_tensor(img_bgr: np.ndarray) -> torch.Tensor:
+    """BGR ndarray → 归一化 float32 Tensor [1, C, H, W]（RGB 顺序）
+    复用于 Zero-DCE 推理和 NIQE 评估，避免重复转换逻辑"""
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    img_tensor = torch.from_numpy(img_rgb.astype(np.float32) / 255.0)
+    return img_tensor.permute(2, 0, 1).unsqueeze(0)
+
+
+# ==========================================
+# NIQE 模型懒加载（无参考图像质量评价）
+# ==========================================
+_niqe_model = None
+
+def _get_niqe_model():
+    """懒加载 NIQE 模型，首次调用时初始化"""
+    global _niqe_model
+    if _niqe_model is None:
+        try:
+            import pyiqa
+            _niqe_model = pyiqa.create_metric('niqe', device=torch.device('cpu'))
+        except Exception as e:
+            print(f"Warning: NIQE 模型加载失败: {e}")
+    return _niqe_model
+
+
+def calculate_niqe(img_bgr: np.ndarray) -> float:
+    """
+    计算单张图像的 NIQE 分数（无参考指标，越低越好）
+    
+    Args:
+        img_bgr: 输入图像 (BGR 格式)
+    
+    Returns:
+        float: NIQE 分数，越低表示质量越好
+    """
+    try:
+        niqe_model = _get_niqe_model()
+        if niqe_model is None:
+            return float('nan')
+        
+        img_tensor = bgr_to_tensor(img_bgr)
+        
+        with torch.no_grad():
+            score = niqe_model(img_tensor)
+        
+        return float(score.item())
+    except Exception as e:
+        print(f"NIQE 计算出错: {e}")
+        return float('nan')
+
+
+# ==========================================
 # 指标计算模块
 # ==========================================
 
 def calculate_metrics(img1_bgr: np.ndarray, img2_bgr: np.ndarray) -> dict:
     """
-    计算两张图像的质量指标
+    计算两张图像的质量指标（需要参考图）
     
     Args:
         img1_bgr: 参考图像 (BGR 格式)
         img2_bgr: 处理后图像 (BGR 格式)
     
     Returns:
-        dict: 包含 RMSE, PSNR, SSIM 的字典
+        dict: 包含 PSNR, SSIM 的字典
     """
-    # 计算 RMSE
-    diff = img1_bgr.astype(np.float32) - img2_bgr.astype(np.float32)
-    mse = np.mean(diff * diff)
-    rmse = np.sqrt(mse)
-    
     # 计算 PSNR
-    psnr = 20 * np.log10(255.0 / rmse) if mse > 0 else 99.0
+    diff = img1_bgr.astype(np.float64) - img2_bgr.astype(np.float64)
+    mse = np.mean(diff * diff)
+    psnr = 10.0 * np.log10(255.0 * 255.0 / mse) if mse > 0 else 99.0
     
     # 计算 SSIM（缩小图像加速）
     scale = 0.5
@@ -169,19 +206,9 @@ def calculate_metrics(img1_bgr: np.ndarray, img2_bgr: np.ndarray) -> dict:
     ssim_score = ssim_metric(img1_gray, img2_gray, data_range=255)
     
     return {
-        "RMSE": float(rmse),
         "PSNR": float(psnr),
         "SSIM": float(ssim_score)
     }
-
-
-def calculate_metrics_from_bytes(img1_bytes: bytes, img2_bytes: bytes) -> dict:
-    """
-    从字节流计算指标（用于 Streamlit 缓存）
-    """
-    img1 = cv2.imdecode(np.frombuffer(img1_bytes, np.uint8), cv2.IMREAD_COLOR)
-    img2 = cv2.imdecode(np.frombuffer(img2_bytes, np.uint8), cv2.IMREAD_COLOR)
-    return calculate_metrics(img1, img2)
 
 
 # ==========================================
@@ -199,7 +226,7 @@ def get_memory_usage() -> float:
 # 算法调度模块
 # ==========================================
 
-def process_algorithm(algo_name: str, img_bgr: np.ndarray, params: dict) -> dict:
+def process_algorithm(algo_name: str, img_bgr: np.ndarray, params: dict, zerodce_model=None) -> dict:
     """
     执行单个算法并记录性能指标
     
@@ -207,6 +234,7 @@ def process_algorithm(algo_name: str, img_bgr: np.ndarray, params: dict) -> dict
         algo_name: 算法名称 (HE/Retinex/Zero-DCE)
         img_bgr: 输入图像 (BGR 格式)
         params: 算法参数字典
+        zerodce_model: 预加载的 Zero-DCE 模型（避免在子线程中调用 st.cache_resource）
     
     Returns:
         dict: 包含 result, time_ms, memory_mb, success 的字典
@@ -232,7 +260,7 @@ def process_algorithm(algo_name: str, img_bgr: np.ndarray, params: dict) -> dict
                 high_clip=retinex_params.get("high_clip", 0.99)
             )
         elif algo_name == "Zero-DCE":
-            model = init_zerodce_model()
+            model = zerodce_model
             result = process_with_zerodce(model, img_bgr) if model else img_bgr
         else:
             result = img_bgr
@@ -257,8 +285,8 @@ def _process_algorithm_wrapper(args):
     """
     并行执行的包装函数
     """
-    algo_name, img_bgr, params = args
-    return algo_name, process_algorithm(algo_name, img_bgr, params)
+    algo_name, img_bgr, params, zerodce_model = args
+    return algo_name, process_algorithm(algo_name, img_bgr, params, zerodce_model=zerodce_model)
 
 
 def run_algorithms_parallel(img_bgr: np.ndarray, algorithms: list, params: dict, max_workers: int = 3) -> dict:
@@ -274,7 +302,14 @@ def run_algorithms_parallel(img_bgr: np.ndarray, algorithms: list, params: dict,
     Returns:
         dict: {algo_name: result_dict} 的字典
     """
-    args_list = [(algo, img_bgr, params) for algo in algorithms]
+    # 【关键修复】在主线程中预加载 Zero-DCE 模型
+    # @st.cache_resource 装饰器在 ThreadPoolExecutor 子线程中会因缺少
+    # ScriptRunContext 而导致死锁，必须在主线程提前加载
+    zerodce_model = None
+    if "Zero-DCE" in algorithms:
+        zerodce_model = init_zerodce_model()
+    
+    args_list = [(algo, img_bgr, params, zerodce_model) for algo in algorithms]
     results = {}
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
