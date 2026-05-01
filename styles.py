@@ -82,7 +82,7 @@ body { font-family: 'Inter', -apple-system, sans-serif; background: transparent;
     border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.05);
 }
 .image-card img { width: 100%; height: auto; display: block; }
-.card-header { padding: 10px 14px; font-weight: 600; font-size: 13px; letter-spacing: 0.3px; }
+.card-header { padding: 10px 14px; font-weight: 600; font-size: 13px; letter-spacing: 0.3px; text-align: center; }
 .metrics-row { display: flex; gap: 6px; padding: 6px 8px; background: #f8fafc; }
 .metric-box { flex: 1; border-radius: 8px; padding: 6px 4px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
 .metric-label { font-size: 10px; font-weight: 500; }
