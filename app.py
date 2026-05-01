@@ -30,25 +30,31 @@ st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 # ==========================================
 # 2. 常量
 # ==========================================
-ALGO_ORDER = ["HE", "Retinex", "Zero-DCE"]
+ALGO_ORDER = ["HE", "MSRCR", "Zero-DCE"]
+
+# ALGO_INFO = {
+#     "HE":       ("HE",       "直方图均衡化"),
+#     "MSRCR":  ("MSRCR",  "带色彩恢复的多尺度Retinex"),
+#     "Zero-DCE": ("Zero-DCE", "零参考深度学习"),
+# }
 
 ALGO_INFO = {
-    "HE":       ("HE",       "全局直方图均衡化"),
-    "Retinex":  ("Retinex",  "多尺度 Retinex 增强"),
+    "HE":       ("HE",       "直方图均衡化"),
+    "MSRCR":  ("MSRCR",  "带色彩恢复的多尺度Retinex"),
     "Zero-DCE": ("Zero-DCE", "零参考深度学习"),
 }
 
 ALGO_BADGE = {
     "HE":       ("#ebf8ff", "#2b6cb0"),
-    "Retinex":  ("#faf5ff", "#553c9a"),
+    "MSRCR":  ("#faf5ff", "#553c9a"),
     "Zero-DCE": ("#fff5f5", "#c53030"),
 }
 
 ALGO_DISPLAY = {
     "原图":     "原图",
-    "HE":       "HE 直方图均衡",
-    "Retinex":  "Retinex 增强",
-    "Zero-DCE": "Zero-DCE 深度学习",
+    "HE":       "HE",
+    "MSRCR":  "MSRCR",
+    "Zero-DCE": "Zero-DCE",
 }
 
 # 指标卡片配置：(label, 方向箭头, 渐变色, 标签色, 值色, format)
@@ -69,7 +75,7 @@ _DEFAULTS = {
     "img_bgr": None, "img_rgb": None, "uploaded_filename": "", "file_bytes": None,
     "ref_bgr": None, "ref_rgb": None, "ref_filename": "", "ref_file_bytes": None,
     "he_params": {"clip_limit": 3.0, "tile_grid": 8},
-    "retinex_params": {
+    "MSRCR_params": {
         "sigma_list": "15,80,250",
         "G": 5.0, "b": 25.0, "alpha": 125.0, "beta": 46.0,
         "low_clip": 0.01, "high_clip": 0.99,
@@ -155,7 +161,7 @@ def build_cards_html() -> str:
     # 原图
     cards += (
         f'<div class="image-card">'
-        f'<div class="card-header" style="background:linear-gradient(135deg,#f1f5f9,#e2e8f0);color:#475569;">原图</div>'
+        f'<div class="card-header" style="background:linear-gradient(135deg,#f1f5f9,#e2e8f0);color:#475569;text-align:center;">原图</div>'
         f'<img src="data:image/jpeg;base64,{img_to_b64(s.img_rgb)}" alt="原图">'
         f'</div>'
     )
@@ -170,7 +176,7 @@ def build_cards_html() -> str:
 
         cards += (
             f'<div class="image-card">'
-            f'<div class="card-header" style="background:linear-gradient(135deg,{bg} 0%,{bg}dd 100%);color:{tc};">{name}</div>'
+            f'<div class="card-header" style="background:linear-gradient(135deg,{bg} 0%,{bg}dd 100%);color:{tc};text-align:center;">{name}</div>'
             f'<img src="data:image/jpeg;base64,{img_to_b64(result_rgb)}" alt="{name}">'
             f'{_build_metric_html(m.get("PSNR", "N/A"), m.get("SSIM", "N/A"), m.get("NIQE", "N/A"))}'
             f'</div>'
@@ -181,7 +187,7 @@ def build_cards_html() -> str:
         ref_rgb = cv2.cvtColor(s.ref_bgr, cv2.COLOR_BGR2RGB)
         cards += (
             f'<div class="image-card">'
-            f'<div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);color:#065f46;">🎯 参考图 (Ground Truth)</div>'
+            f'<div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);color:#065f46;">参考图</div>'
             f'<img src="data:image/jpeg;base64,{img_to_b64(ref_rgb)}" alt="参考图">'
             f'</div>'
         )
@@ -259,10 +265,10 @@ with st.sidebar:
         with st.expander("HE 参数", expanded=False):
             st.caption("HE 为全局均衡，无需额外参数")
 
-    # Retinex 参数
-    if "Retinex" in selected:
-        with st.expander("Retinex 参数", expanded=False):
-            p = st.session_state.retinex_params
+    # MSRCR 参数
+    if "MSRCR" in selected:
+        with st.expander("MSRCR 参数", expanded=False):
+            p = st.session_state.MSRCR_params
             p["sigma_list"] = st.text_input(
                 "Sigma List", p["sigma_list"], placeholder="例: 15,80,250",
                 help="高斯模糊尺度列表（英文逗号隔开）\n\n小尺度：保留细节\n\n中尺度：平衡细节与光照\n\n大尺度：估计全局光照\n\n📌 参考值：15,80,250"
@@ -420,7 +426,7 @@ if execute_btn and st.session_state.img_bgr is not None:
 
         params = {
             "he_params": st.session_state.he_params,
-            "retinex_params": st.session_state.retinex_params,
+            "MSRCR_params": st.session_state.MSRCR_params,
         }
         status.text(f"并行执行 {len(algos)} 个算法...")
         results = image_processing.run_algorithms_parallel(img, algos, params)
